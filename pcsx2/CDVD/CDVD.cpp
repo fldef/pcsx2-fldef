@@ -38,6 +38,8 @@
 wxString DiscSerial;
 
 static cdvdStruct cdvd;
+static u32 cdvdOpenCount = 0;
+static u32 scmdLastOpenCount = 0;
 
 s64 PSXCLK = 36864000;
 
@@ -524,6 +526,7 @@ s32 cdvdCtrlTrayOpen()
 	DiscSwapTimerSeconds = cdvd.RTC.second; // remember the PS2 time when this happened
 	cdvd.Status = CDVD_STATUS_TRAY_OPEN;
 	cdvd.Ready = CDVD_NOTREADY;
+    ++cdvdOpenCount;
 
 	return 0; // needs to be 0 for success according to homebrew test "CDVD"
 }
@@ -1053,13 +1056,15 @@ u8 cdvdRead(u8 key)
 			CDVD_LOG("cdvdRead0A(Status) %x", cdvd.Status);
 			return cdvd.Status;
 
-		case 0x0B: // TRAY-STATE (if tray has been opened)
+		case 0x0B: // MEDIA CHANGED
 		{
-			CDVD_LOG("cdvdRead0B(Tray) (1 open, 0 closed): %x", cdvd.Status);
-			if (cdvd.Status == CDVD_STATUS_TRAY_OPEN)
-				return 1;
-			else
-				return 0;
+			CDVD_LOG("cdvdRead0B(MediaChanged): %x", !(scmdLastOpenCount == cdvdOpenCount));
+            if (scmdLastOpenCount == cdvdOpenCount) {
+                return 0;
+            } else {
+                scmdLastOpenCount = cdvdOpenCount;
+                return 1;
+            }
 		}
 		case 0x0C: // CRT MINUTE
 			CDVD_LOG("cdvdRead0C(Min) %x", itob((u8)(cdvd.Sector/(60*75))));
@@ -1497,11 +1502,6 @@ static void cdvdWrite16(u8 rt)		 // SCOMMAND
 				break;
 
 			case 0x05: // CdTrayReqState  (0:1) - resets the tray open detection
-
-				// Fixme: This function is believed to change some status flag
-				// when the Tray state (stored as "1" in cdvd.Status) is different between 2 successive calls.
-				// Cdvd.Status can be different than 1 here, yet we may still have to report an open status.
-				// Gonna have to investigate further. (rama)
 
 				//Console.Warning("CdTrayReqState. cdvd.Status = %d", cdvd.Status);
 				SetResultSize(1);
