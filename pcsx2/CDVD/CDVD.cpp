@@ -100,11 +100,6 @@ static struct {
 
 s64 PSXCLK = 36864000;
 
-#define TRAY_PAUSE_TRIGGER 1
-#define TRAY_SEEK_TRIGGER  4
-#define TRAY_CLOSE_TRIGGER 7
-#define TRAY_MAX_TIMEOUT  10
-
 static __fi void SetResultSize(u8 size)
 {
 	cdvd.ResultC = size;
@@ -587,6 +582,7 @@ s32 cdvdCtrlTrayOpen()
 	DiscSwapTimerSeconds = cdvd.RTC.second; // remember the PS2 time when this happened
 	cdvd.Status = CDVD_STATUS_TRAY_OPEN;
 	cdvd.Ready = CDVD_NOTREADY;
+    cdvd.TrayTimeout = 3;
 
 	return 0; // needs to be 0 for success according to homebrew test "CDVD"
 }
@@ -595,11 +591,23 @@ static s32 cdvdCtrlTrayClose()
 {
 	DevCon.WriteLn( Color_Green, L"Close virtual disk tray");
 	cdvd.Ready = CDVD_READY1;
-	cdvd.TrayTimeout = TRAY_CLOSE_TRIGGER - 1; // Reset so it can't get closed twice by cdvdVsync()
-    cdvd.MediaChanged = true;
 	
 	cdvdDetectDisk();
+    cdvd.MediaChanged = true;
 	GetCoreThread().ApplySettings(g_Conf->EmuOptions);
+
+    if (cdvd.Type == CDVD_TYPE_NODISC)
+    {
+        // No disc. We're stopped with no future status to trigger.
+        cdvd.Status = CDVD_STATUS_PAUSE;
+        cdvd.TrayTimeout = 0;
+    }
+    else
+    {
+        // Simulate reading the disc with a seek.
+        cdvd.Status = CDVD_STATUS_SEEK;
+        cdvd.TrayTimeout = 3;
+    }
 	
 	return 0; // needs to be 0 for success according to homebrew test "CDVD"
 }
@@ -1022,29 +1030,31 @@ static uint cdvdStartSeek( uint newsector, CDVD_MODE_TYPE mode )
 u8 monthmap[13] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
 static __fi void cdvdUpdateTrayState() {
-    if (cdvd.Status == CDVD_STATUS_TRAY_OPEN && cdvd.TrayTimeout == 0)
+    // If <1, no pending actions.
+    // If 1, an action is being triggered.
+    // If >1, tick down and continue.
+    if (cdvd.TrayTimeout < 1) return;
+
+    if (cdvd.TrayTimeout > 1)
     {
-        cdvd.TrayTimeout = TRAY_MAX_TIMEOUT;
-    }
-    else if (cdvd.TrayTimeout > 0)
-    {
-        switch (cdvd.TrayTimeout)
-        {
-            case TRAY_CLOSE_TRIGGER:
-                cdvdCtrlTrayClose();
-                break;
-            case TRAY_SEEK_TRIGGER:
-                // Native hardware uses SEEK status before PAUSE
-                // following a disc swap.
-                cdvd.Status = CDVD_STATUS_SEEK;
-                break;
-            case TRAY_PAUSE_TRIGGER:
-                // Done.
-                cdvd.Status = CDVD_STATUS_PAUSE;
-                break;
-            // default: keep the status we're at.
-        }
+        // Nothing triggered yet.
         --cdvd.TrayTimeout;
+    }
+    else if (cdvd.Status == CDVD_STATUS_TRAY_OPEN)
+    {
+        // Time to close the tray.
+        cdvdCtrlTrayClose();
+    }
+    else if (cdvd.Status == CDVD_STATUS_SEEK)
+    {
+        // Time to stop faking a new-media seek.
+        cdvd.Status = CDVD_STATUS_PAUSE;
+        cdvd.TrayTimeout = 0;
+    }
+    else
+    {
+        // Unknown state. Assume some other process is in effect.
+        cdvd.TrayTimeout = 0;
     }
 }
 
