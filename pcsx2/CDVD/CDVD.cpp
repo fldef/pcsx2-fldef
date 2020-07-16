@@ -37,68 +37,10 @@
 // this string will be empty.
 wxString DiscSerial;
 
-static struct {
-	u8 nCommand;
-	u8 Ready;
-	u8 Error;
-	u8 PwOff;
-	u8 Status;
-	u8 Type;
-	u8 sCommand;
-	u8 sDataIn;
-	u8 sDataOut;
-	u8 HowTo;
-
-	u8 Param[32];
-	u8 Result[32];
-
-	u8 ParamC;
-	u8 ParamP;
-	u8 ResultC;
-	u8 ResultP;
-
-	u8 CBlockIndex;
-	u8 COffset;
-	u8 CReadWrite;
-	u8 CNumBlocks;
-
-	// Calculates the number of Vsyncs and once it reaches a total number of Vsyncs worth a second with respect to
-	// the videomode's vertical frequency, it updates the real time clock.
-	int RTCcount;
-	cdvdRTC RTC;
-
-	u32 Sector;
-	int nSectors;
-	int Readed; // change to bool. --arcum42
-	int Reading; // same here.
-	int ReadMode;
-	int BlockSize; // Total bytes transfered at 1x speed
-	int Speed;
-	int RetryCnt;
-	int RetryCntP;
-	int RErr;
-	int SpindlCtrl;
-
-	u8 Key[16];
-	u8 KeyXor;
-	u8 decSet;
-
-	u8  mg_buffer[65536];
-	int mg_size;
-	int mg_maxsize;
-	int mg_datatype;//0-data(encrypted); 1-header
-	u8	mg_kbit[16];//last BIT key 'seen'
-	u8	mg_kcon[16];//last content key 'seen'
-
-	u8  TrayTimeout;
-	u8  Action;			// the currently scheduled emulated action
-	u32 SeekToSector;	// Holds the destination sector during seek operations.
-	u32 ReadTime;		// Avg. time to read one block of data (in Iop cycles)
-	bool Spinning;		// indicates if the Cdvd is spinning or needs a spinup delay
-    bool  MediaChanged;
-} cdvd;
+static cdvdStruct cdvd;
 
 s64 PSXCLK = 36864000;
+
 
 static __fi void SetResultSize(u8 size)
 {
@@ -582,33 +524,38 @@ s32 cdvdCtrlTrayOpen()
 	DiscSwapTimerSeconds = cdvd.RTC.second; // remember the PS2 time when this happened
 	cdvd.Status = CDVD_STATUS_TRAY_OPEN;
 	cdvd.Ready = CDVD_NOTREADY;
-    cdvd.TrayTimeout = 3;
+
+	// Mark the media as changed now, before loading the disc.
+	// This matches the hardware behavior, even though it's not intuitive.
+	cdvd.MediaChanged = true;
+	cdvd.TrayTimeout = 3;
 
 	return 0; // needs to be 0 for success according to homebrew test "CDVD"
 }
 
-static s32 cdvdCtrlTrayClose()
+s32 cdvdCtrlTrayClose()
 {
 	DevCon.WriteLn( Color_Green, L"Close virtual disk tray");
 	cdvd.Ready = CDVD_READY1;
 	
 	cdvdDetectDisk();
-    cdvd.MediaChanged = true;
 	GetCoreThread().ApplySettings(g_Conf->EmuOptions);
 
-    if (cdvd.Type == CDVD_TYPE_NODISC)
-    {
-        // No disc. We're stopped with no future status to trigger.
-        cdvd.Status = CDVD_STATUS_PAUSE;
-        cdvd.TrayTimeout = 0;
-    }
-    else
-    {
-        // Simulate reading the disc with a seek.
-        cdvd.Status = CDVD_STATUS_SEEK;
-        cdvd.TrayTimeout = 3;
-    }
-	
+	if (cdvd.Type == CDVD_TYPE_NODISC)
+	{
+		// No disc. We're stopped with no future status to trigger.
+		cdvd.Status = CDVD_STATUS_PAUSE;
+		cdvd.TrayTimeout = 0;
+	}
+	else
+	{
+		// Simulate reading the disc with a seek. This follows
+		// hardware behavior and is required by SingStar games.
+		// Set the tray timeout so that the status gets updated later.
+		cdvd.Status = CDVD_STATUS_SEEK;
+		cdvd.TrayTimeout = 3;
+	}
+
 	return 0; // needs to be 0 for success according to homebrew test "CDVD"
 }
 
@@ -1029,33 +976,48 @@ static uint cdvdStartSeek( uint newsector, CDVD_MODE_TYPE mode )
 
 u8 monthmap[13] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
-static __fi void cdvdUpdateTrayState() {
-    // If <1, no pending actions.
-    // If 1, an action is being triggered.
-    // If >1, tick down and continue.
-    if (cdvd.TrayTimeout < 1) return;
+// This function manages moving the cdvd status from OPEN or SEEK
+// to PAUSE. TrayTimeout is used to manage moving the status ahead.
+// There are two possible sequences of status:
+// When a disc is inserted or swapped: OPEN -> SEEK -> PAUSE (done)
+// When a disc is removed ("no disc"): OPEN -> PAUSE (done)
+// Any process that interrupts this sequence is responsible
+// for resetting TrayTimeout appropriately. (Example:
+// A game may close the tray before the timeout triggers, so
+// cdvdCtrlTrayClose is required to reset TrayTimeout.)
+//
+// Disc swapping is complete (or irrelevant) when TrayTimeout < 1.
+// A state transition is being triggered when TrayTimeout == 1.
+// A state transition is not yet ready if TrayTimeout > 1.
+static __fi void cdvdUpdateTrayState()
+{
+	if (cdvd.TrayTimeout < 1) return;
 
-    if (cdvd.TrayTimeout > 1)
-    {
-        // Nothing triggered yet.
-        --cdvd.TrayTimeout;
-    }
-    else if (cdvd.Status == CDVD_STATUS_TRAY_OPEN)
-    {
-        // Time to close the tray.
-        cdvdCtrlTrayClose();
-    }
-    else if (cdvd.Status == CDVD_STATUS_SEEK)
-    {
-        // Time to stop faking a new-media seek.
-        cdvd.Status = CDVD_STATUS_PAUSE;
-        cdvd.TrayTimeout = 0;
-    }
-    else
-    {
-        // Unknown state. Assume some other process is in effect.
-        cdvd.TrayTimeout = 0;
-    }
+	if (cdvd.TrayTimeout > 1)
+	{
+		// Nothing triggered yet.
+		--cdvd.TrayTimeout;
+	}
+	else if (cdvd.Status == CDVD_STATUS_TRAY_OPEN)
+	{
+		// Time to close the tray.
+		CDVD_LOG("TrayTimeout: OPEN -> closing.");
+		cdvdCtrlTrayClose();
+	}
+	else if (cdvd.Status == CDVD_STATUS_SEEK)
+	{
+		// Time to stop faking a new-media seek. Move to pause and be done.
+		CDVD_LOG("TrayTimeout: SEEK -> PAUSE. Clearing TrayTimeout.");
+		cdvd.Status = CDVD_STATUS_PAUSE;
+		cdvd.TrayTimeout = 0;
+	}
+	else
+	{
+		// Unexpected state in our sequence. Assume some other process is in effect
+		// and forget about future tray changes. This is not likely a cause for concern.
+		CDVD_LOG("TrayTimeout: Unexpected status %02x. Clearing TrayTimeout.", cdvd.Status);
+		cdvd.TrayTimeout = 0;
+	}
 }
 
 void cdvdVsync() {
@@ -1063,7 +1025,7 @@ void cdvdVsync() {
 	if (cdvd.RTCcount < (GetVerticalFrequency().ToIntRounded())) return;
 	cdvd.RTCcount = 0;
 
-    cdvdUpdateTrayState();
+	cdvdUpdateTrayState();
 
 	cdvd.RTC.second++;
 	if (cdvd.RTC.second < 60) return;
@@ -1136,12 +1098,17 @@ u8 cdvdRead(u8 key)
 		case 0x0B: // MEDIA CHANGED
 		{
 			CDVD_LOG("cdvdRead0B(MediaChanged): %x", cdvd.MediaChanged);
-            if (cdvd.MediaChanged) {
-                cdvd.MediaChanged = false;
-                return 1;
-            } else {
-                return 0;
-            }
+			// The return value is assigned to the second argument of sceCdTrayReq(int, uint *)
+			if (cdvd.MediaChanged)
+			{
+				// It may be more technically correct to reset this in SCMD 0x05. However,
+				// since sceCdTrayReq always calls SCMD 0x05 and this register is only accessed there,
+				// resetting here is equivalent (and simpler).
+				cdvd.MediaChanged = false;
+				return 1;
+			}
+			else
+				return 0;
 		}
 		case 0x0C: // CRT MINUTE
 			CDVD_LOG("cdvdRead0C(Min) %x", itob((u8)(cdvd.Sector/(60*75))));
