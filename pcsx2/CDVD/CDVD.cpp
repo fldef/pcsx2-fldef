@@ -526,7 +526,7 @@ s32 cdvdCtrlTrayOpen()
 	cdvd.Ready = CDVD_NOTREADY;
 
 	// Mark the tray state as changed now, before loading the disc.
-	// This matches the hardware behavior, even though it's
+	// This matches the hardware behavior, even though it may seem
 	// less intuitive than changing it on close.
 	cdvd.TrayChanged = true;
 	cdvd.TrayTimeout = 3;
@@ -1100,16 +1100,7 @@ u8 cdvdRead(u8 key)
 		{
 			CDVD_LOG("cdvdRead0B(TrayChanged): %x", cdvd.TrayChanged);
 			// The return value is assigned to the second argument of sceCdTrayReq(int, uint *)
-			if (cdvd.TrayChanged)
-			{
-				// It may be more technically correct to reset this in SCMD 0x05. However,
-				// since sceCdTrayReq always calls SCMD 0x05 and this register is only accessed there,
-				// resetting here is equivalent (and simpler).
-				cdvd.TrayChanged = false;
-				return 1;
-			}
-			else
-				return 0;
+			return cdvd.TrayChanged;
 		}
 		case 0x0C: // CRT MINUTE
 			CDVD_LOG("cdvdRead0C(Min) %x", itob((u8)(cdvd.Sector/(60*75))));
@@ -1547,8 +1538,8 @@ static void cdvdWrite16(u8 rt)		 // SCOMMAND
 				break;
 
 			case 0x05: // CdTrayReqState  (0:1) - resets the tray open detection
-
 				//Console.Warning("CdTrayReqState. cdvd.Status = %d", cdvd.Status);
+				cdvd.TrayChanged = false;
 				SetResultSize(1);
 
 				if (cdvd.Status == CDVD_STATUS_TRAY_OPEN)

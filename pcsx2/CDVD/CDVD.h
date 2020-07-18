@@ -135,7 +135,7 @@ struct cdvdStruct {
 	bool Spinning;		// indicates if the Cdvd is spinning or needs a spinup delay
 
 	// TrayChanged is true if the tray has been opened since the
-	// game's previous call to sceCdTrayReq.
+	// game's previous call to SCMD 0x05 (e.g., by calling sceCdTrayReq(CHECK, _)).
 	bool TrayChanged;
 };
 
