@@ -134,9 +134,9 @@ struct cdvdStruct {
 	u32 ReadTime;		// Avg. time to read one block of data (in Iop cycles)
 	bool Spinning;		// indicates if the Cdvd is spinning or needs a spinup delay
 
-	// MediaChanged is true if the tray has been opened since the
+	// TrayChanged is true if the tray has been opened since the
 	// game's previous call to sceCdTrayReq.
-	bool MediaChanged;
+	bool TrayChanged;
 };
 
 extern void cdvdReset();

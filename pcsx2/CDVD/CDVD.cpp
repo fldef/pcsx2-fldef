@@ -525,9 +525,10 @@ s32 cdvdCtrlTrayOpen()
 	cdvd.Status = CDVD_STATUS_TRAY_OPEN;
 	cdvd.Ready = CDVD_NOTREADY;
 
-	// Mark the media as changed now, before loading the disc.
-	// This matches the hardware behavior, even though it's not intuitive.
-	cdvd.MediaChanged = true;
+	// Mark the tray state as changed now, before loading the disc.
+	// This matches the hardware behavior, even though it's
+	// less intuitive than changing it on close.
+	cdvd.TrayChanged = true;
 	cdvd.TrayTimeout = 3;
 
 	return 0; // needs to be 0 for success according to homebrew test "CDVD"
@@ -977,7 +978,7 @@ static uint cdvdStartSeek( uint newsector, CDVD_MODE_TYPE mode )
 u8 monthmap[13] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
 // This function manages moving the cdvd status from OPEN or SEEK
-// to PAUSE. TrayTimeout is used to manage moving the status ahead.
+// to PAUSE. TrayTimeout is used to time moving the status ahead.
 // There are two possible sequences of status:
 // When a disc is inserted or swapped: OPEN -> SEEK -> PAUSE (done)
 // When a disc is removed ("no disc"): OPEN -> PAUSE (done)
@@ -1095,16 +1096,16 @@ u8 cdvdRead(u8 key)
 			CDVD_LOG("cdvdRead0A(Status) %x", cdvd.Status);
 			return cdvd.Status;
 
-		case 0x0B: // MEDIA CHANGED
+		case 0x0B: // TRAY CHANGED
 		{
-			CDVD_LOG("cdvdRead0B(MediaChanged): %x", cdvd.MediaChanged);
+			CDVD_LOG("cdvdRead0B(TrayChanged): %x", cdvd.TrayChanged);
 			// The return value is assigned to the second argument of sceCdTrayReq(int, uint *)
-			if (cdvd.MediaChanged)
+			if (cdvd.TrayChanged)
 			{
 				// It may be more technically correct to reset this in SCMD 0x05. However,
 				// since sceCdTrayReq always calls SCMD 0x05 and this register is only accessed there,
 				// resetting here is equivalent (and simpler).
-				cdvd.MediaChanged = false;
+				cdvd.TrayChanged = false;
 				return 1;
 			}
 			else
